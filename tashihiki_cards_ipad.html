@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>たしひきカード</title>
+  <style>
+    :root{
+      --pad: 14px;
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #fff;
+      color: #000;
+      font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    body{
+      /* iPadのダブルタップズーム抑止（対応ブラウザ） */
+      touch-action: manipulation;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: rgba(0,0,0,0);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #topbar{
+      position: fixed;
+      top: env(safe-area-inset-top);
+      left: env(safe-area-inset-left);
+      right: env(safe-area-inset-right);
+      padding: var(--pad);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      pointer-events: none; /* 全面タップの邪魔をしない */
+    }
+    #modes, #stats{
+      pointer-events: auto; /* ボタンだけ有効 */
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .btn{
+      font-size: 18px;
+      line-height: 1;
+      padding: 10px 12px;
+      border: 1px solid #000;
+      border-radius: 10px;
+      background: transparent;
+      color: #000;
+    }
+    .btn[aria-pressed="true"]{
+      background: #000;
+      color: #fff;
+    }
+    #stats{
+      font-size: 18px;
+      opacity: 0.6;
+      gap: 10px;
+    }
+    #card{
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    #expr{
+      font-weight: 700;
+      font-size: clamp(72px, 13vw, 200px);
+      letter-spacing: 0.02em;
+    }
+    #ansWrap{
+      margin-top: 0.20em;
+      display: flex;
+      align-items: baseline;
+      gap: 0.25em;
+      font-weight: 700;
+      font-size: clamp(72px, 13vw, 200px);
+      visibility: hidden; /* 答えは最初は非表示（高さは保持） */
+    }
+    #eq{
+      font-weight: 600;
+      opacity: 0.7;
+    }
+    #hint{
+      position: fixed;
+      bottom: env(safe-area-inset-bottom);
+      left: 0;
+      right: 0;
+      padding: 12px 16px;
+      text-align: center;
+      font-size: 16px;
+      opacity: 0.35;
+      pointer-events: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <div id="modes" aria-label="モード">
+      <button class="btn" id="modeAdd" aria-pressed="false">足し算</button>
+      <button class="btn" id="modeSub" aria-pressed="false">引き算</button>
+      <button class="btn" id="modeMix" aria-pressed="true">まぜる</button>
+    </div>
+    <div id="stats" aria-label="進捗">
+      <span id="count">0</span>
+    </div>
+  </div>
+
+  <main id="card" aria-label="計算カード">
+    <div id="expr" aria-live="polite">—</div>
+    <div id="ansWrap" aria-live="polite"><span id="eq">=</span><span id="ans">—</span></div>
+  </main>
+
+  <div id="hint">タップで答え / もう一回タップで次の問題</div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      // ---- iPadのズーム抑止（ダブルタップ / ピンチ） ----
+      // 1) Safariのピンチ（gesture）を抑止
+      document.addEventListener('gesturestart', e => e.preventDefault(), {passive:false});
+      document.addEventListener('gesturechange', e => e.preventDefault(), {passive:false});
+      document.addEventListener('gestureend', e => e.preventDefault(), {passive:false});
+
+      // 2) ダブルタップの既定動作（ズーム）を抑止
+      let lastTouchEnd = 0;
+      document.addEventListener('touchend', (e) => {
+        const now = Date.now();
+        if (now - lastTouchEnd <= 300) {
+          e.preventDefault();
+        }
+        lastTouchEnd = now;
+      }, { passive: false });
+
+      // 3) 一部ブラウザのdblclickズームも抑止
+      document.addEventListener('dblclick', (e) => e.preventDefault());
+
+      // ---- 要素 ----
+      const card = document.getElementById('card');
+      const exprEl = document.getElementById('expr');
+      const ansWrapEl = document.getElementById('ansWrap');
+      const ansEl = document.getElementById('ans');
+      const countEl = document.getElementById('count');
+
+      const modeAddBtn = document.getElementById('modeAdd');
+      const modeSubBtn = document.getElementById('modeSub');
+      const modeMixBtn = document.getElementById('modeMix');
+
+      // ---- 状態 ----
+      let mode = 'mix'; // 'add' | 'sub' | 'mix'
+      let showingAnswer = false;
+      let solvedCount = 0;
+
+      function rand1to9(){
+        return Math.floor(Math.random() * 9) + 1; // 1..9 (0なし)
+      }
+
+      function newProblem(){
+        let op = '+';
+        if (mode === 'add') op = '+';
+        if (mode === 'sub') op = '-';
+        if (mode === 'mix') op = (Math.random() < 0.5) ? '+' : '-';
+
+        let a = rand1to9();
+        let b = rand1to9();
+
+        if (op === '-') {
+          // マイナスと0を避けるため、a>b にする（答えは1..8）
+          while (a <= b) {
+            a = rand1to9();
+            b = rand1to9();
+          }
+        }
+
+        const ans = (op === '+') ? (a + b) : (a - b);
+
+        exprEl.textContent = `${a} ${op} ${b}`;
+        ansEl.textContent = `${ans}`;
+        ansWrapEl.style.visibility = 'hidden';
+        showingAnswer = false;
+      }
+
+      function revealAnswer(){
+        ansWrapEl.style.visibility = 'visible';
+        showingAnswer = true;
+        solvedCount += 1;
+        countEl.textContent = solvedCount;
+      }
+
+      function handleTap(){
+        if (!showingAnswer) {
+          revealAnswer();
+        } else {
+          newProblem();
+        }
+      }
+
+      // ---- タップ操作（iPad向け） ----
+      // touchend で処理し、click（二重発火）を抑止
+      let ignoreClick = false;
+
+      card.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        ignoreClick = true;
+        // click が発火しない環境でもフラグが残らないようにする
+        setTimeout(() => { ignoreClick = false; }, 400);
+        handleTap();
+      }, {passive:false});
+
+      card.addEventListener('click', (e) => {
+        if (ignoreClick) { ignoreClick = false; return; }
+        handleTap();
+      });
+
+      // ---- モード切替 ----
+      function setMode(next){
+        mode = next;
+        modeAddBtn.setAttribute('aria-pressed', String(mode === 'add'));
+        modeSubBtn.setAttribute('aria-pressed', String(mode === 'sub'));
+        modeMixBtn.setAttribute('aria-pressed', String(mode === 'mix'));
+        newProblem();
+      }
+
+      function stopPropagationOn(btn){
+        // モードボタンを押した時にカードが進まないように
+        btn.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); }, {passive:false});
+        btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+      }
+
+      [modeAddBtn, modeSubBtn, modeMixBtn].forEach(stopPropagationOn);
+
+      modeAddBtn.addEventListener('click', () => setMode('add'));
+      modeSubBtn.addEventListener('click', () => setMode('sub'));
+      modeMixBtn.addEventListener('click', () => setMode('mix'));
+
+      modeAddBtn.addEventListener('touchend', () => setMode('add'), {passive:false});
+      modeSubBtn.addEventListener('touchend', () => setMode('sub'), {passive:false});
+      modeMixBtn.addEventListener('touchend', () => setMode('mix'), {passive:false});
+
+      // ---- 起動 ----
+      newProblem();
+
+      // キーボード操作（外付けキーボード用）：スペース/Enterで進む
+      document.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          handleTap();
+        }
+      });
+
+    })();
+  </script>
+</body>
+</html>
