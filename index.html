@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>計算カード（1桁）</title>
+  <style>
+    :root { color-scheme: light; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #fff;
+      color: #000;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+    }
+    body {
+      padding: 14px;
+      box-sizing: border-box;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: manipulation; /* iOSの余計な挙動を抑える */
+    }
+
+    .top {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      font-size: 14px;
+    }
+    select, button {
+      font-size: 16px;
+      padding: 10px 12px;
+      border: 1px solid #000;
+      background: #fff;
+      color: #000;
+      border-radius: 0;
+      outline: none;
+    }
+    button:disabled, select:disabled { opacity: 0.5; }
+
+    .stats {
+      margin-top: 10px;
+      font-size: 14px;
+      white-space: pre-wrap;
+    }
+
+    .stage {
+      margin-top: 12px;
+      height: calc(100% - 140px);
+      min-height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* カード（装飾最小：枠のみ） */
+    .card {
+      width: min(720px, 100%);
+      height: min(520px, 100%);
+      border: 2px solid #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      line-height: 1.1;
+    }
+
+    .frontText {
+      font-size: clamp(64px, 10vw, 120px);
+      font-weight: 800;
+      letter-spacing: 1px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .backWrap {
+      display: grid;
+      gap: 14px;
+      padding: 20px;
+    }
+    .answerText {
+      font-size: clamp(88px, 14vw, 160px);
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+    .eqText {
+      font-size: clamp(24px, 4.5vw, 48px);
+      font-weight: 700;
+      opacity: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 12px;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <label>
+      種類
+      <select id="mode">
+        <option value="add">足し算</option>
+        <option value="sub">引き算</option>
+        <option value="mix">ミックス</option>
+      </select>
+    </label>
+
+    <label>
+      時間
+      <select id="limit">
+        <option value="60">60秒</option>
+        <option value="120">120秒</option>
+        <option value="0">無制限</option>
+      </select>
+    </label>
+
+    <button id="start">開始</button>
+    <button id="stop" disabled>終了</button>
+  </div>
+
+  <div class="stats" id="best">ベスト: -</div>
+  <div class="stats" id="stats">タップで開始</div>
+
+  <div class="stage">
+    <div class="card" id="card" role="button" aria-label="計算カード">
+      <div id="front" class="frontText">タップ</div>
+
+      <div id="back" class="backWrap" style="display:none;">
+        <div id="answer" class="answerText">-</div>
+        <div id="equation" class="eqText">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint">操作：タップ（問題→答え→次の問題）</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  const modeEl = $("mode");
+  const limitEl = $("limit");
+  const startBtn = $("start");
+  const stopBtn  = $("stop");
+  const cardEl   = $("card");
+  const frontEl  = $("front");
+  const backEl   = $("back");
+  const ansEl    = $("answer");
+  const eqEl     = $("equation");
+  const statsEl  = $("stats");
+  const bestEl   = $("best");
+
+  let running = false;
+  let showingAnswer = false;
+
+  let startTime = 0;
+  let timer = null;
+
+  let solvedCount = 0; // 答えを見た回数（= 1問完了扱い）
+  let current = null;
+
+  function randInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  function makeProblem() {
+    const mode = modeEl.value;
+    let opMode = mode;
+    if (mode === "mix") opMode = (Math.random() < 0.5) ? "add" : "sub";
+
+    if (opMode === "add") {
+      const a = randInt(1, 9);
+      const b = randInt(1, 9);
+      return { a, b, op: "+", ans: a + b };
+    } else {
+      // マイナスが出ない引き算（b <= a）
+      const a = randInt(1, 9);
+      const b = randInt(1, a);
+      return { a, b, op: "−", ans: a - b };
+    }
+  }
+
+  function showQuestion(p) {
+    frontEl.textContent = `${p.a} ${p.op} ${p.b}`;
+    frontEl.style.display = "";
+    backEl.style.display = "none";
+    showingAnswer = false;
+  }
+
+  function showAnswer(p) {
+    ansEl.textContent = String(p.ans);
+    eqEl.textContent = `${p.a} ${p.op} ${p.b} = ${p.ans}`;
+    frontEl.style.display = "none";
+    backEl.style.display = "";
+    showingAnswer = true;
+  }
+
+  function limitSeconds() {
+    const v = Number(limitEl.value);
+    return Number.isFinite(v) ? v : 60;
+  }
+
+  function bestKey() {
+    return `calc_cards_best_v1_${modeEl.value}_${limitEl.value}`;
+  }
+
+  function loadBest() {
+    try {
+      const raw = localStorage.getItem(bestKey());
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+
+  function saveBest(data) {
+    try { localStorage.setItem(bestKey(), JSON.stringify(data)); } catch {}
+  }
+
+  function updateBestUI() {
+    const best = loadBest();
+    if (!best) {
+      bestEl.textContent = "ベスト: -";
+      return;
+    }
+    bestEl.textContent =
+      `ベスト: ${best.apm.toFixed(1)} 問/分  |  ${best.date}`;
+  }
+
+  function setUI(r) {
+    startBtn.disabled = r;
+    modeEl.disabled = r;
+    limitEl.disabled = r;
+    stopBtn.disabled = !r;
+  }
+
+  function calcAPM(elapsedSec) {
+    if (elapsedSec <= 0) return 0;
+    return solvedCount / (elapsedSec / 60);
+  }
+
+  function tick() {
+    if (!running) return;
+    const now = performance.now();
+    const elapsed = (now - startTime) / 1000;
+    const lim = limitSeconds();
+
+    if (lim > 0) {
+      const remain = lim - elapsed;
+      const apm = calcAPM(Math.min(elapsed, lim));
+      statsEl.textContent = `残り ${Math.max(0, remain).toFixed(1)}秒  |  ${solvedCount}問  |  ${apm.toFixed(1)} 問/分`;
+      if (remain <= 0) stop(true);
+    } else {
+      const apm = calcAPM(elapsed);
+      statsEl.textContent = `経過 ${elapsed.toFixed(1)}秒  |  ${solvedCount}問  |  ${apm.toFixed(1)} 問/分`;
+    }
+  }
+
+  function start() {
+    if (running) return;
+    running = true;
+    solvedCount = 0;
+    startTime = performance.now();
+    setUI(true);
+
+    current = makeProblem();
+    showQuestion(current);
+
+    tick();
+    timer = setInterval(tick, 50);
+  }
+
+  function stop(timeUp = false) {
+    if (!running) return;
+    running = false;
+
+    if (timer) clearInterval(timer);
+    timer = null;
+
+    setUI(false);
+
+    const now = performance.now();
+    const elapsed = (now - startTime) / 1000;
+    const lim = limitSeconds();
+    const effective = (lim > 0) ? Math.min(elapsed, lim) : elapsed;
+    const apm = calcAPM(Math.max(0.001, effective));
+
+    statsEl.textContent = (timeUp ? "時間終了" : "終了") + `  |  ${solvedCount}問  |  ${apm.toFixed(1)} 問/分`;
+
+    // ベスト更新（同じ設定ごと）
+    const prev = loadBest();
+    if (!prev || apm > prev.apm) {
+      saveBest({ apm, date: new Date().toLocaleDateString("ja-JP") });
+      updateBestUI();
+    }
+
+    // 終了時表示は「タップ」で再開できるようにする
+    frontEl.textContent = "タップ";
+    frontEl.style.display = "";
+    backEl.style.display = "none";
+    showingAnswer = false;
+  }
+
+  function nextTap() {
+    if (!running) {
+      start();
+      return;
+    }
+
+    if (!showingAnswer) {
+      // 問題→答え（ここで1問完了扱い）
+      showAnswer(current);
+      solvedCount++;
+      tick();
+    } else {
+      // 答え→次の問題
+      current = makeProblem();
+      showQuestion(current);
+    }
+  }
+
+  // iPadはclickよりpointerdownの方が素直
+  cardEl.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    nextTap();
+  }, { passive: false });
+
+  startBtn.addEventListener("click", start);
+  stopBtn.addEventListener("click", () => stop(false));
+  modeEl.addEventListener("change", updateBestUI);
+  limitEl.addEventListener("change", updateBestUI);
+
+  updateBestUI();
+})();
+</script>
+</body>
+</html>
+
