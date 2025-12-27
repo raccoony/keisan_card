@@ -8,9 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <title>たしひきカード</title>
   <style>
-    :root{
-      --pad: 14px;
-    }
+    :root{ --pad: 14px; }
+
     html, body {
       height: 100%;
       margin: 0;
@@ -19,17 +18,20 @@
       font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
       -webkit-text-size-adjust: 100%;
     }
+
     body{
       /* iPadのダブルタップズーム抑止（対応ブラウザ） */
       touch-action: manipulation;
       -webkit-user-select: none;
       user-select: none;
       -webkit-tap-highlight-color: rgba(0,0,0,0);
+
       display: flex;
       align-items: center;
       justify-content: center;
       overflow: hidden;
     }
+
     #topbar{
       position: fixed;
       top: env(safe-area-inset-top);
@@ -42,12 +44,15 @@
       justify-content: space-between;
       pointer-events: none; /* 全面タップの邪魔をしない */
     }
+
     #modes, #stats{
       pointer-events: auto; /* ボタンだけ有効 */
       display: flex;
       gap: 6px;
       align-items: center;
+      flex-wrap: wrap;
     }
+
     .btn{
       font-size: 18px;
       line-height: 1;
@@ -57,15 +62,23 @@
       background: transparent;
       color: #000;
     }
+
     .btn[aria-pressed="true"]{
       background: #000;
       color: #fff;
     }
+
+    .btn:disabled{
+      opacity: 0.35;
+      border-style: dashed;
+    }
+
     #stats{
       font-size: 18px;
       opacity: 0.6;
       gap: 10px;
     }
+
     #card{
       width: 100%;
       height: 100%;
@@ -76,11 +89,13 @@
       padding: 24px;
       box-sizing: border-box;
     }
+
     #expr{
       font-weight: 700;
       font-size: clamp(72px, 13vw, 200px);
       letter-spacing: 0.02em;
     }
+
     #ansWrap{
       margin-top: 0.20em;
       display: flex;
@@ -90,10 +105,12 @@
       font-size: clamp(72px, 13vw, 200px);
       visibility: hidden; /* 答えは最初は非表示（高さは保持） */
     }
+
     #eq{
       font-weight: 600;
       opacity: 0.7;
     }
+
     #hint{
       position: fixed;
       bottom: env(safe-area-inset-bottom);
@@ -116,6 +133,8 @@
       <button class="btn" id="modeAdd" aria-pressed="false">足し算</button>
       <button class="btn" id="modeSub" aria-pressed="false">引き算</button>
       <button class="btn" id="modeMix" aria-pressed="true">まぜる</button>
+      <button class="btn" id="voiceBtn" aria-pressed="false">音声OFF</button>
+      <button class="btn" id="speedBtn" aria-pressed="true" style="display:none;">速</button>
     </div>
     <div id="stats" aria-label="進捗">
       <span id="count">0</span>
@@ -134,12 +153,10 @@
       'use strict';
 
       // ---- iPadのズーム抑止（ダブルタップ / ピンチ） ----
-      // 1) Safariのピンチ（gesture）を抑止
       document.addEventListener('gesturestart', e => e.preventDefault(), {passive:false});
       document.addEventListener('gesturechange', e => e.preventDefault(), {passive:false});
       document.addEventListener('gestureend', e => e.preventDefault(), {passive:false});
 
-      // 2) ダブルタップの既定動作（ズーム）を抑止
       let lastTouchEnd = 0;
       document.addEventListener('touchend', (e) => {
         const now = Date.now();
@@ -149,7 +166,6 @@
         lastTouchEnd = now;
       }, { passive: false });
 
-      // 3) 一部ブラウザのdblclickズームも抑止
       document.addEventListener('dblclick', (e) => e.preventDefault());
 
       // ---- 要素 ----
@@ -163,13 +179,29 @@
       const modeSubBtn = document.getElementById('modeSub');
       const modeMixBtn = document.getElementById('modeMix');
 
+      const voiceBtn = document.getElementById('voiceBtn');
+      const speedBtn = document.getElementById('speedBtn');
+
       // ---- 状態 ----
       let mode = 'mix'; // 'add' | 'sub' | 'mix'
       let showingAnswer = false;
       let solvedCount = 0;
 
+      // 現在の問題
+      let current = { a: 1, b: 1, op: '+', ans: 2 };
+
+      // 読み上げ
+      const hasTTS = ('speechSynthesis' in window) && ('SpeechSynthesisUtterance' in window);
+      let voiceOn = false;
+      let voiceFast = true; // 要望：素早く読み上げ（デフォルト速い）
+      let cachedVoice = null;
+
       function rand1to9(){
-        return Math.floor(Math.random() * 8) + 2; // 1..9 (0なし)
+        return Math.floor(Math.random() * 9) + 1; // 1..9 (0なし)
+      }
+
+      function computeAns(a, op, b){
+        return (op === '+') ? (a + b) : (a - b);
       }
 
       function newProblem(){
@@ -189,12 +221,17 @@
           }
         }
 
-        const ans = (op === '+') ? (a + b) : (a - b);
+        const ans = computeAns(a, op, b);
+        current = { a, b, op, ans };
 
         exprEl.textContent = `${a} ${op} ${b}`;
         ansEl.textContent = `${ans}`;
         ansWrapEl.style.visibility = 'hidden';
         showingAnswer = false;
+
+        if (voiceOn) {
+          speakCurrentProblem();
+        }
       }
 
       function revealAnswer(){
@@ -212,22 +249,85 @@
         }
       }
 
+      // ---- 読み上げ（Web Speech API） ----
+      function loadVoices(){
+        if (!hasTTS) return;
+        try {
+          const voices = window.speechSynthesis.getVoices();
+          if (!voices || voices.length === 0) return;
+
+          // 日本語優先（iPadだと "Kyoko" 等が入っていることが多い）
+          cachedVoice =
+            voices.find(v => (v.lang || '').toLowerCase().startsWith('ja')) ||
+            voices.find(v => (v.lang || '').toLowerCase().includes('ja')) ||
+            null;
+        } catch (_) {
+          // 取得できない環境は無視
+        }
+      }
+
+      function speak(text){
+        if (!hasTTS) return;
+        try {
+          // 連打でキューが溜まらないように
+          window.speechSynthesis.cancel();
+
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = 'ja-JP';
+          u.rate = voiceFast ? 1.6 : 1.25; // 速/普
+          u.pitch = 1.0;
+          u.volume = 1.0;
+          if (cachedVoice) u.voice = cachedVoice;
+
+          window.speechSynthesis.speak(u);
+        } catch (_) {
+          // 例外は無視（端末依存のため）
+        }
+      }
+
+      function speakCurrentProblem(){
+        const opWord = (current.op === '+') ? 'たす' : 'ひく';
+        // 「7 + 8」ではなく「7 たす 8」のように短く
+        speak(`${current.a} ${opWord} ${current.b}`);
+      }
+
+      function updateVoiceUI(){
+        voiceBtn.setAttribute('aria-pressed', String(voiceOn));
+        voiceBtn.textContent = voiceOn ? '音声ON' : (hasTTS ? '音声OFF' : '音声不可');
+
+        if (!hasTTS) {
+          voiceBtn.disabled = true;
+          speedBtn.style.display = 'none';
+          return;
+        }
+
+        speedBtn.style.display = voiceOn ? 'inline-block' : 'none';
+        speedBtn.setAttribute('aria-pressed', String(voiceFast));
+        speedBtn.textContent = voiceFast ? '速' : '普';
+      }
+
       // ---- タップ操作（iPad向け） ----
-      // touchend で処理し、click（二重発火）を抑止
-      let ignoreClick = false;
+      // touchend + click の二重発火を抑止しつつ、どの入力（指/マウス）でも動くようにする
+      function bindTap(el, handler, { stopPropagation = false } = {}){
+        let ignoreClick = false;
 
-      card.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        ignoreClick = true;
-        // click が発火しない環境でもフラグが残らないようにする
-        setTimeout(() => { ignoreClick = false; }, 400);
-        handleTap();
-      }, {passive:false});
+        el.addEventListener('touchend', (e) => {
+          e.preventDefault();
+          if (stopPropagation) e.stopPropagation();
+          ignoreClick = true;
+          setTimeout(() => { ignoreClick = false; }, 400);
+          handler();
+        }, {passive:false});
 
-      card.addEventListener('click', (e) => {
-        if (ignoreClick) { ignoreClick = false; return; }
-        handleTap();
-      });
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (stopPropagation) e.stopPropagation();
+          if (ignoreClick) { ignoreClick = false; return; }
+          handler();
+        });
+      }
+
+      bindTap(card, handleTap);
 
       // ---- モード切替 ----
       function setMode(next){
@@ -238,26 +338,49 @@
         newProblem();
       }
 
-      function stopPropagationOn(btn){
-        // モードボタンを押した時にカードが進まないように
-        btn.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); }, {passive:false});
-        btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+      // ボタンはカードを進めないように stopPropagation
+      bindTap(modeAddBtn, () => setMode('add'), { stopPropagation: true });
+      bindTap(modeSubBtn, () => setMode('sub'), { stopPropagation: true });
+      bindTap(modeMixBtn, () => setMode('mix'), { stopPropagation: true });
+
+      // ---- 音声ボタン ----
+      function toggleVoice(){
+        if (!hasTTS) return;
+        voiceOn = !voiceOn;
+        updateVoiceUI();
+        if (voiceOn) {
+          // iOSは「ユーザー操作の中で」最初のspeakが必要なことがある
+          speakCurrentProblem();
+        } else {
+          try { window.speechSynthesis.cancel(); } catch (_) {}
+        }
       }
 
-      [modeAddBtn, modeSubBtn, modeMixBtn].forEach(stopPropagationOn);
+      function toggleSpeed(){
+        voiceFast = !voiceFast;
+        updateVoiceUI();
+        if (voiceOn) {
+          // 切り替えたら今の問題を読み直す
+          speakCurrentProblem();
+        }
+      }
 
-      modeAddBtn.addEventListener('click', () => setMode('add'));
-      modeSubBtn.addEventListener('click', () => setMode('sub'));
-      modeMixBtn.addEventListener('click', () => setMode('mix'));
-
-      modeAddBtn.addEventListener('touchend', () => setMode('add'), {passive:false});
-      modeSubBtn.addEventListener('touchend', () => setMode('sub'), {passive:false});
-      modeMixBtn.addEventListener('touchend', () => setMode('mix'), {passive:false});
+      bindTap(voiceBtn, toggleVoice, { stopPropagation: true });
+      bindTap(speedBtn, toggleSpeed, { stopPropagation: true });
 
       // ---- 起動 ----
+      if (hasTTS) {
+        loadVoices();
+        // voice list は遅れて来ることがある
+        try {
+          window.speechSynthesis.onvoiceschanged = loadVoices;
+        } catch (_) {}
+      }
+
+      updateVoiceUI();
       newProblem();
 
-      // キーボード操作（外付けキーボード用）：スペース/Enterで進む
+      // 外付けキーボード用：スペース/Enterで進む
       document.addEventListener('keydown', (e) => {
         if (e.key === ' ' || e.key === 'Enter') {
           e.preventDefault();
