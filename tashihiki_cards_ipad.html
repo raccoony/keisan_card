@@ -193,7 +193,7 @@
       // 読み上げ
       const hasTTS = ('speechSynthesis' in window) && ('SpeechSynthesisUtterance' in window);
       let voiceOn = true;
-      let voiceFast = false; // デフォルトは普通速度
+      let voiceFast = true; // 要望：素早く読み上げ（デフォルト速い）
       let cachedVoice = null;
 
       function rand1to9(){
