@@ -145,6 +145,13 @@
   <div class="hint">操作：タップ（問題→答え→次の問題）</div>
 
 <script>
+  // ダブルタップズーム抑止（保険）
+let _lastTouchEnd = 0;
+cardEl.addEventListener("touchend", (e) => {
+  const now = Date.now();
+  if (now - _lastTouchEnd <= 350) e.preventDefault(); // 350ms以内の2回目はズームさせない
+  _lastTouchEnd = now;
+}, { passive: false });
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -159,14 +166,6 @@
   const eqEl     = $("equation");
   const statsEl  = $("stats");
   const bestEl   = $("best");
-
-  // ダブルタップズーム抑止（保険）
-  let lastTouchEnd = 0;
-  cardEl.addEventListener("touchend", (e) => {
-    const now = Date.now();
-    if (now - lastTouchEnd <= 350) e.preventDefault(); // 350ms以内の2回目はズームさせない
-    lastTouchEnd = now;
-  }, { passive: false });
 
   let running = false;
   let showingAnswer = false;
@@ -351,3 +350,4 @@
 </script>
 </body>
 </html>
+
