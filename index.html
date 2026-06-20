@@ -111,7 +111,6 @@
       <select id="mode">
         <option value="add">足し算</option>
         <option value="sub">引き算</option>
-        <option value="mul">九九</option>
         <option value="mix">ミックス</option>
       </select>
     </label>
@@ -185,19 +184,12 @@
   function makeProblem() {
     const mode = modeEl.value;
     let opMode = mode;
-    if (mode === "mix") {
-      const modes = ["add", "sub", "mul"];
-      opMode = modes[randInt(0, modes.length - 1)];
-    }
+    if (mode === "mix") opMode = (Math.random() < 0.5) ? "add" : "sub";
 
     if (opMode === "add") {
       const a = randInt(1, 9);
       const b = randInt(1, 9);
       return { a, b, op: "+", ans: a + b };
-    } else if (opMode === "mul") {
-      const a = randInt(1, 9);
-      const b = randInt(1, 9);
-      return { a, b, op: "×", ans: a * b };
     } else {
       // マイナスが出ない引き算（b <= a）
       const a = randInt(1, 9);
