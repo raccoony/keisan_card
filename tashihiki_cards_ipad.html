@@ -200,8 +200,12 @@
         return Math.floor(Math.random() * 9) + 1; // 1..9 (0なし)
       }
 
-      function rand2to9(){
-        return Math.floor(Math.random() * 8) + 2; // 2..9
+      function rand1to19(){
+        return Math.floor(Math.random() * 19) + 1; // 1..19 (0なし)
+      }
+
+      function rand1to(max){
+        return Math.floor(Math.random() * max) + 1; // 1..max
       }
 
       function computeAns(a, op, b){
@@ -221,11 +225,9 @@
         let b = (op === '+') ? randForAdd() : randForSub();
 
         if (op === '-') {
-          // マイナスと0を避けるため、a>b にする（答えは1..8）
-          while (a <= b) {
-            a = randForSub();
-            b = randForSub();
-          }
+          // 19までの数から一桁を引く。負の数を避けるため b<=a にする（答えは0以上）
+          a = rand1to19();
+          b = rand1to(Math.min(9, a));
         }
 
         const ans = computeAns(a, op, b);
