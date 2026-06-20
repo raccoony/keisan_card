@@ -130,11 +130,12 @@
 <body>
   <div id="topbar">
     <div id="modes" aria-label="モード">
-      <button class="btn" id="modeAdd" aria-pressed="false">足し算</button>
+      <button class="btn" id="modeAdd" aria-pressed="true">足し算</button>
       <button class="btn" id="modeSub" aria-pressed="false">引き算</button>
-      <button class="btn" id="modeMix" aria-pressed="true">まぜる</button>
-      <button class="btn" id="voiceBtn" aria-pressed="false">音声OFF</button>
-      <button class="btn" id="speedBtn" aria-pressed="true" style="display:none;">速</button>
+      <button class="btn" id="modeMul" aria-pressed="false">九九</button>
+      <button class="btn" id="modeMix" aria-pressed="false">まぜる</button>
+      <button class="btn" id="voiceBtn" aria-pressed="true">音声ON</button>
+      <button class="btn" id="speedBtn" aria-pressed="false" style="display:none;">普</button>
     </div>
     <div id="stats" aria-label="進捗">
       <span id="count">0</span>
@@ -177,13 +178,14 @@
 
       const modeAddBtn = document.getElementById('modeAdd');
       const modeSubBtn = document.getElementById('modeSub');
+      const modeMulBtn = document.getElementById('modeMul');
       const modeMixBtn = document.getElementById('modeMix');
 
       const voiceBtn = document.getElementById('voiceBtn');
       const speedBtn = document.getElementById('speedBtn');
 
       // ---- 状態 ----
-      let mode = 'mix'; // 'add' | 'sub' | 'mix'
+      let mode = 'add'; // 'add' | 'sub' | 'mul' | 'mix'
       let showingAnswer = false;
       let solvedCount = 0;
 
@@ -192,32 +194,53 @@
 
       // 読み上げ
       const hasTTS = ('speechSynthesis' in window) && ('SpeechSynthesisUtterance' in window);
-      let voiceOn = false;
-      let voiceFast = true; // 要望：素早く読み上げ（デフォルト速い）
+      let voiceOn = true;
+      let voiceFast = false; // デフォルトは普通速度
       let cachedVoice = null;
 
       function rand1to9(){
         return Math.floor(Math.random() * 9) + 1; // 1..9 (0なし)
       }
 
+      function rand2to9(){
+        return Math.floor(Math.random() * 8) + 2; // 2..9
+      }
+
       function computeAns(a, op, b){
-        return (op === '+') ? (a + b) : (a - b);
+        if (op === '+') return a + b;
+        if (op === '×') return a * b;
+        return a - b;
       }
 
       function newProblem(){
         let op = '+';
         if (mode === 'add') op = '+';
         if (mode === 'sub') op = '-';
-        if (mode === 'mix') op = (Math.random() < 0.5) ? '+' : '-';
+        if (mode === 'mul') op = '×';
+        if (mode === 'mix') op = ['+', '-', '×'][Math.floor(Math.random() * 3)];
 
-        let a = rand1to9();
-        let b = rand1to9();
+        const randForAdd = () => rand2to9();
+        const randForSub = () => rand1to9();
+        const randForMul = () => rand1to9();
+
+        let a = randForSub();
+        let b = randForSub();
+
+        if (op === '+') {
+          a = randForAdd();
+          b = randForAdd();
+        }
+
+        if (op === '×') {
+          a = randForMul();
+          b = randForMul();
+        }
 
         if (op === '-') {
           // マイナスと0を避けるため、a>b にする（答えは1..8）
           while (a <= b) {
-            a = rand1to9();
-            b = rand1to9();
+            a = randForSub();
+            b = randForSub();
           }
         }
 
@@ -239,6 +262,9 @@
         showingAnswer = true;
         solvedCount += 1;
         countEl.textContent = solvedCount;
+        if (voiceOn) {
+          speakAnswer();
+        }
       }
 
       function handleTap(){
@@ -286,9 +312,13 @@
       }
 
       function speakCurrentProblem(){
-        const opWord = (current.op === '+') ? 'たす' : 'ひく';
+        const opWord = (current.op === '+') ? 'たす' : (current.op === '×') ? 'かける' : 'ひく';
         // 「7 + 8」ではなく「7 たす 8」のように短く
         speak(`${current.a} ${opWord} ${current.b}`);
+      }
+
+      function speakAnswer(){
+        speak(`こたえ ${current.ans}`);
       }
 
       function updateVoiceUI(){
@@ -334,6 +364,7 @@
         mode = next;
         modeAddBtn.setAttribute('aria-pressed', String(mode === 'add'));
         modeSubBtn.setAttribute('aria-pressed', String(mode === 'sub'));
+        modeMulBtn.setAttribute('aria-pressed', String(mode === 'mul'));
         modeMixBtn.setAttribute('aria-pressed', String(mode === 'mix'));
         newProblem();
       }
@@ -341,6 +372,7 @@
       // ボタンはカードを進めないように stopPropagation
       bindTap(modeAddBtn, () => setMode('add'), { stopPropagation: true });
       bindTap(modeSubBtn, () => setMode('sub'), { stopPropagation: true });
+      bindTap(modeMulBtn, () => setMode('mul'), { stopPropagation: true });
       bindTap(modeMixBtn, () => setMode('mix'), { stopPropagation: true });
 
       // ---- 音声ボタン ----

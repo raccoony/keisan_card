@@ -111,6 +111,7 @@
       <select id="mode">
         <option value="add">足し算</option>
         <option value="sub">引き算</option>
+        <option value="mul">九九</option>
         <option value="mix">ミックス</option>
       </select>
     </label>
@@ -145,13 +146,6 @@
   <div class="hint">操作：タップ（問題→答え→次の問題）</div>
 
 <script>
-  // ダブルタップズーム抑止（保険）
-let _lastTouchEnd = 0;
-cardEl.addEventListener("touchend", (e) => {
-  const now = Date.now();
-  if (now - _lastTouchEnd <= 350) e.preventDefault(); // 350ms以内の2回目はズームさせない
-  _lastTouchEnd = now;
-}, { passive: false });
 (() => {
   const $ = (id) => document.getElementById(id);
 
@@ -166,6 +160,14 @@ cardEl.addEventListener("touchend", (e) => {
   const eqEl     = $("equation");
   const statsEl  = $("stats");
   const bestEl   = $("best");
+
+  // ダブルタップズーム抑止（保険）
+  let lastTouchEnd = 0;
+  cardEl.addEventListener("touchend", (e) => {
+    const now = Date.now();
+    if (now - lastTouchEnd <= 350) e.preventDefault(); // 350ms以内の2回目はズームさせない
+    lastTouchEnd = now;
+  }, { passive: false });
 
   let running = false;
   let showingAnswer = false;
@@ -183,12 +185,19 @@ cardEl.addEventListener("touchend", (e) => {
   function makeProblem() {
     const mode = modeEl.value;
     let opMode = mode;
-    if (mode === "mix") opMode = (Math.random() < 0.5) ? "add" : "sub";
+    if (mode === "mix") {
+      const modes = ["add", "sub", "mul"];
+      opMode = modes[randInt(0, modes.length - 1)];
+    }
 
     if (opMode === "add") {
       const a = randInt(1, 9);
       const b = randInt(1, 9);
       return { a, b, op: "+", ans: a + b };
+    } else if (opMode === "mul") {
+      const a = randInt(1, 9);
+      const b = randInt(1, 9);
+      return { a, b, op: "×", ans: a * b };
     } else {
       // マイナスが出ない引き算（b <= a）
       const a = randInt(1, 9);
@@ -350,4 +359,3 @@ cardEl.addEventListener("touchend", (e) => {
 </script>
 </body>
 </html>
-
