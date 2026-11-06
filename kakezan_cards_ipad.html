@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <title>かけ算カード</title>
+  <style>
+    :root { --pad: 14px; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #fff;
+      color: #000;
+      font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+      touch-action: manipulation;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #topbar {
+      position: fixed;
+      z-index: 1;
+      top: env(safe-area-inset-top);
+      left: env(safe-area-inset-left);
+      right: env(safe-area-inset-right);
+      padding: var(--pad);
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    #controls, #stats {
+      pointer-events: auto;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      box-sizing: border-box;
+      min-height: 44px;
+      font: inherit;
+      font-size: 18px;
+      line-height: 1;
+      padding: 10px 12px;
+      border: 1px solid #000;
+      border-radius: 10px;
+      background: #fff;
+      color: #000;
+    }
+
+    .btn[aria-pressed="true"] { background: #000; color: #fff; }
+    .btn:disabled { opacity: 0.35; border-style: dashed; }
+    .btn:focus-visible { outline: 3px solid #000; outline-offset: 3px; }
+
+    #stats { font-size: 18px; opacity: 0.6; padding-top: 12px; }
+
+    #card {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 96px 24px 60px;
+      box-sizing: border-box;
+      cursor: pointer;
+    }
+
+    #expr {
+      font-weight: 700;
+      font-size: clamp(64px, 13vw, 200px);
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    #ansWrap {
+      margin-top: 0.20em;
+      display: flex;
+      align-items: baseline;
+      gap: 0.25em;
+      font-weight: 700;
+      font-size: clamp(64px, 13vw, 200px);
+      visibility: hidden;
+    }
+
+    #eq { font-weight: 600; opacity: 0.7; }
+
+    #hint {
+      position: fixed;
+      bottom: env(safe-area-inset-bottom);
+      left: 0;
+      right: 0;
+      padding: 12px 16px;
+      text-align: center;
+      font-size: 16px;
+      opacity: 0.35;
+      pointer-events: none;
+    }
+
+    @media (max-height: 500px) {
+      #card { padding-top: 72px; padding-bottom: 44px; }
+      #expr, #ansWrap { font-size: min(13vw, 25vh); }
+    }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <div id="controls" aria-label="段と音声の設定">
+      <select class="btn" id="tableSelect" aria-label="練習する段">
+        <option value="all">ぜんぶ</option>
+        <option value="1">1の段</option>
+        <option value="2">2の段</option>
+        <option value="3">3の段</option>
+        <option value="4">4の段</option>
+        <option value="5">5の段</option>
+        <option value="6">6の段</option>
+        <option value="7">7の段</option>
+        <option value="8">8の段</option>
+        <option value="9">9の段</option>
+      </select>
+      <button class="btn" id="voiceBtn" aria-pressed="true">音声ON</button>
+      <button class="btn" id="speedBtn" aria-pressed="false" hidden>普</button>
+    </div>
+    <div id="stats" aria-label="答えを見た枚数">
+      <span id="count">0</span>
+    </div>
+  </div>
+
+  <main id="card" aria-label="かけ算カード">
+    <div id="expr" aria-live="polite">—</div>
+    <div id="ansWrap" aria-live="polite"><span id="eq">=</span><span id="ans">—</span></div>
+  </main>
+
+  <div id="hint">タップで答え / もう一回タップで次の問題</div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      // 既存カードと同じく、iPadでのピンチ・ダブルタップズームを抑止。
+      for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+        document.addEventListener(type, e => e.preventDefault(), { passive: false });
+      }
+      document.addEventListener('dblclick', e => e.preventDefault());
+
+      // 二本指を順番に離しても、最後の指をカードのタップにしない。
+      let multiTouchGesture = false;
+      document.addEventListener('touchstart', event => {
+        if (event.touches.length > 1) multiTouchGesture = true;
+      }, { capture: true, passive: true });
+      for (const type of ['touchend', 'touchcancel']) {
+        document.addEventListener(type, event => {
+          if (event.touches.length === 0) multiTouchGesture = false;
+        }, { passive: true });
+      }
+
+      const card = document.getElementById('card');
+      const exprEl = document.getElementById('expr');
+      const ansWrapEl = document.getElementById('ansWrap');
+      const ansEl = document.getElementById('ans');
+      const countEl = document.getElementById('count');
+      const tableSelect = document.getElementById('tableSelect');
+      const voiceBtn = document.getElementById('voiceBtn');
+      const speedBtn = document.getElementById('speedBtn');
+
+      // 行が「段」（左の数）、列が右の数。並びを交換すると読みも変わる。
+      // 読み方の出典: https://contest.japias.jp/tqj2003/60114/graph.htm
+      const problemReadings = [
+        ['いんいち', 'いんに', 'いんさん', 'いんし', 'いんご', 'いんろく', 'いんしち', 'いんはち', 'いんく'],
+        ['にいち', 'ににん', 'にさん', 'にし', 'にご', 'にろく', 'にしち', 'にはち', 'にく'],
+        ['さんいち', 'さんに', 'さざん', 'さんし', 'さんご', 'さぶろく', 'さんしち', 'さんぱ', 'さんく'],
+        ['しいち', 'しに', 'しさん', 'しし', 'しご', 'しろく', 'ししち', 'しは', 'しく'],
+        ['ごいち', 'ごに', 'ごさん', 'ごし', 'ごご', 'ごろく', 'ごしち', 'ごは', 'ごっく'],
+        ['ろくいち', 'ろくに', 'ろくさん', 'ろくし', 'ろくご', 'ろくろく', 'ろくしち', 'ろくは', 'ろっく'],
+        ['しちいち', 'しちに', 'しちさん', 'しちし', 'しちご', 'しちろく', 'しちしち', 'しちは', 'しちく'],
+        ['はちいち', 'はちに', 'はっさん', 'はちし', 'はちご', 'はちろく', 'はちしち', 'はっぱ', 'はっく'],
+        ['くいち', 'くに', 'くさん', 'くし', 'くご', 'くろく', 'くしち', 'くは', 'くく']
+      ];
+      const onesReadings = ['', 'いち', 'に', 'さん', 'し', 'ご', 'ろく', 'しち', 'はち', 'く'];
+      const tensReadings = ['', 'じゅう', 'にじゅう', 'さんじゅう', 'しじゅう', 'ごじゅう', 'ろくじゅう', 'しちじゅう', 'はちじゅう'];
+
+      let showingAnswer = false;
+      let solvedCount = 0;
+      let current = null;
+      let deck = [];
+      const hasTTS = ('speechSynthesis' in window) && ('SpeechSynthesisUtterance' in window);
+      let voiceOn = hasTTS;
+      let voiceFast = false;
+      let cachedVoice = null;
+
+      function answerReading(answer) {
+        const reading = tensReadings[Math.floor(answer / 10)] + onesReadings[answer % 10];
+        return answer < 10 ? `が ${reading}` : reading;
+      }
+
+      function refillDeck() {
+        const selected = tableSelect.value;
+        deck = [];
+        for (let a = 1; a <= 9; a += 1) {
+          if (selected !== 'all' && a !== Number(selected)) continue;
+          for (let b = 1; b <= 9; b += 1) deck.push({ a, b, ans: a * b });
+        }
+        // 全問をランダムな順で一周してから、もう一度シャッフルする。
+        for (let i = deck.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [deck[i], deck[j]] = [deck[j], deck[i]];
+        }
+        const next = deck[deck.length - 1];
+        if (current && next.a === current.a && next.b === current.b) {
+          [deck[0], deck[deck.length - 1]] = [deck[deck.length - 1], deck[0]];
+        }
+      }
+
+      function newProblem() {
+        if (deck.length === 0) refillDeck();
+        current = deck.pop();
+        exprEl.textContent = `${current.a} × ${current.b}`;
+        ansEl.textContent = String(current.ans);
+        ansWrapEl.style.visibility = 'hidden';
+        ansWrapEl.setAttribute('aria-hidden', 'true');
+        showingAnswer = false;
+        if (voiceOn) speakCurrentProblem();
+      }
+
+      function revealAnswer() {
+        ansWrapEl.style.visibility = 'visible';
+        ansWrapEl.setAttribute('aria-hidden', 'false');
+        showingAnswer = true;
+        solvedCount += 1;
+        countEl.textContent = String(solvedCount);
+        if (voiceOn) speakAnswer();
+      }
+
+      function handleTap() {
+        if (showingAnswer) newProblem();
+        else revealAnswer();
+      }
+
+      function loadVoices() {
+        if (!hasTTS) return;
+        try {
+          cachedVoice = window.speechSynthesis.getVoices().find(
+            voice => (voice.lang || '').toLowerCase().startsWith('ja')
+          ) || null;
+        } catch (_) {}
+      }
+
+      function speak(text) {
+        if (!hasTTS || !voiceOn) return;
+        try {
+          // 連打時は前の読み上げを止めて、現在のカードだけを読む。
+          window.speechSynthesis.cancel();
+          loadVoices();
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.lang = 'ja-JP';
+          utterance.rate = voiceFast ? 1.6 : 1.25;
+          utterance.pitch = 1;
+          utterance.volume = 1;
+          if (cachedVoice) utterance.voice = cachedVoice;
+          window.speechSynthesis.speak(utterance);
+        } catch (_) {}
+      }
+
+      function speakCurrentProblem() {
+        speak(problemReadings[current.a - 1][current.b - 1]);
+      }
+
+      function speakAnswer() {
+        speak(answerReading(current.ans));
+      }
+
+      function speakCurrentCard() {
+        if (showingAnswer) speakAnswer();
+        else speakCurrentProblem();
+      }
+
+      function updateVoiceUI() {
+        voiceBtn.setAttribute('aria-pressed', String(voiceOn));
+        voiceBtn.textContent = voiceOn ? '音声ON' : (hasTTS ? '音声OFF' : '音声不可');
+        voiceBtn.disabled = !hasTTS;
+        speedBtn.hidden = !voiceOn;
+        speedBtn.setAttribute('aria-pressed', String(voiceFast));
+        speedBtn.textContent = voiceFast ? '速' : '普';
+      }
+
+      // タッチの後に発生するclickで、カードが二枚進むのを防ぐ。
+      function bindTap(element, handler) {
+        let ignoreClick = false;
+        let resetTimer;
+        element.addEventListener('touchend', event => {
+          if (multiTouchGesture || event.touches.length !== 0 || event.changedTouches.length !== 1) {
+            event.preventDefault();
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          ignoreClick = true;
+          clearTimeout(resetTimer);
+          resetTimer = setTimeout(() => { ignoreClick = false; }, 400);
+          handler();
+        }, { passive: false });
+        element.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (ignoreClick) { ignoreClick = false; return; }
+          handler();
+        });
+      }
+
+      bindTap(card, handleTap);
+      bindTap(voiceBtn, () => {
+        if (!hasTTS) return;
+        voiceOn = !voiceOn;
+        updateVoiceUI();
+        if (voiceOn) speakCurrentCard();
+        else {
+          try { window.speechSynthesis.cancel(); } catch (_) {}
+        }
+      });
+      bindTap(speedBtn, () => {
+        voiceFast = !voiceFast;
+        updateVoiceUI();
+        if (voiceOn) speakCurrentCard();
+      });
+
+      tableSelect.addEventListener('change', () => {
+        deck = [];
+        solvedCount = 0;
+        countEl.textContent = '0';
+        newProblem();
+      });
+
+      document.addEventListener('keydown', event => {
+        // フォーカス中の設定ボタンや段選択は通常のキーボード操作を優先。
+        if (event.target.closest('button, select, input, textarea, a, [contenteditable]')) return;
+        if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+          event.preventDefault();
+          handleTap();
+        }
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden && hasTTS) {
+          try { window.speechSynthesis.cancel(); } catch (_) {}
+        }
+      });
+
+      if (hasTTS) {
+        loadVoices();
+        try { window.speechSynthesis.onvoiceschanged = loadVoices; } catch (_) {}
+      }
+      updateVoiceUI();
+      newProblem();
+    })();
+  </script>
+</body>
+</html>
