@@ -125,14 +125,93 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
+    .btn:focus-visible, .selection-grid button:focus-visible{
+      outline: 3px solid #1769aa;
+      outline-offset: 2px;
+    }
+
+    #selectionDialog{
+      box-sizing: border-box;
+      width: calc(100% - 24px);
+      max-width: 680px;
+      max-height: calc(100% - 24px);
+      max-height: calc(100dvh - 24px);
+      padding: 18px;
+      border: 2px solid #000;
+      border-radius: 16px;
+      background: #fff;
+      color: #000;
+      overflow: hidden;
+    }
+
+    #selectionDialog[open]{
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #selectionDialog::backdrop{ background: rgba(0,0,0,0.45); }
+
+    .selection-heading, .selection-actions, .selection-footer{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .selection-heading, .selection-footer{ justify-content: space-between; }
+    #selectionDialog > header{ flex-shrink: 0; }
+    .selection-heading h1{ margin: 0; font-size: 24px; }
+    #selectionHelp{ margin: 8px 0 0; font-size: 15px; line-height: 1.6; }
+    #selectionDialog .btn{ min-height: 44px; background: #fff; }
+    #selectionDialog .primary-btn{ background: #000; color: #fff; }
+    .selection-scroll{ min-height: 0; overflow: auto; overscroll-behavior: contain; }
+
+    .selection-grid{
+      width: 100%;
+      min-width: 492px;
+      table-layout: fixed;
+      border-spacing: 4px;
+      text-align: center;
+    }
+
+    .selection-grid th, .selection-grid td{ padding: 0; }
+    .selection-grid button{
+      width: 100%;
+      height: clamp(44px, 5.5vh, 56px);
+      padding: 0;
+      border: 1px solid #999;
+      border-radius: 7px;
+      font: inherit;
+      font-size: 16px;
+      color: #555;
+      background: #fff;
+      touch-action: manipulation;
+    }
+
+    .selection-grid th button{ font-weight: 700; background: #eee; color: #000; }
+    .selection-grid .fact-cell{ touch-action: none; }
+    .selection-grid .fact-cell[aria-pressed="true"]{
+      border-color: #000;
+      background: #000;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    #selectionCount{ font-weight: 700; }
+    #selectionError{ margin: 0; font-size: 14px; color: #a01818; }
+    #selectionError:empty{ display: none; }
   </style>
 </head>
 <body>
   <div id="topbar">
     <div id="modes" aria-label="モード">
       <button class="btn" id="modeMul" aria-pressed="true">九九</button>
+      <button class="btn" id="selectionBtn" aria-haspopup="dialog" aria-controls="selectionDialog">出題設定</button>
       <button class="btn" id="voiceBtn" aria-pressed="true">音声ON</button>
-      <button class="btn" id="speedBtn" aria-pressed="false" style="display:none;">普</button>
+      <button class="btn" id="speedBtn" aria-pressed="true" style="display:none;">速</button>
     </div>
     <div id="stats" aria-label="進捗">
       <span id="count">0</span>
@@ -146,6 +225,28 @@
 
   <div id="hint">タップで答え / もう一回タップで次の問題</div>
 
+  <dialog id="selectionDialog" aria-labelledby="selectionTitle" aria-describedby="selectionHelp">
+    <header>
+      <div class="selection-heading">
+        <h1 id="selectionTitle">出題する九九</h1>
+        <button class="btn" id="cancelSelection" autofocus>キャンセル</button>
+      </div>
+      <p id="selectionHelp">マスをタップ・なぞって選択／解除。黒いマスを出題します。<br>左の数字は「段」、上の数字は「かける数」をまとめて切り替えます。</p>
+    </header>
+    <div class="selection-actions">
+      <button class="btn" id="selectAll">全選択</button>
+      <button class="btn" id="clearSelection">全解除</button>
+    </div>
+    <div class="selection-scroll">
+      <table class="selection-grid" id="selectionGrid" aria-label="出題する九九の選択表"></table>
+    </div>
+    <p id="selectionError" role="status"></p>
+    <footer class="selection-footer">
+      <span id="selectionCount" aria-live="polite" aria-atomic="true"></span>
+      <button class="btn primary-btn" id="applySelection">適用</button>
+    </footer>
+  </dialog>
+
   <script>
     (() => {
       'use strict';
@@ -157,6 +258,8 @@
 
       let lastTouchEnd = 0;
       document.addEventListener('touchend', (e) => {
+        // 設定画面は各ボタンのタップ処理と、マスのPointer Eventsで操作する。
+        if (e.target.closest('#selectionDialog')) return;
         const now = Date.now();
         if (now - lastTouchEnd <= 300) {
           e.preventDefault();
@@ -174,72 +277,44 @@
       const countEl = document.getElementById('count');
 
       const modeMulBtn = document.getElementById('modeMul');
+      const selectionBtn = document.getElementById('selectionBtn');
+      const selectionDialog = document.getElementById('selectionDialog');
+      const selectionGrid = document.getElementById('selectionGrid');
+      const selectionCount = document.getElementById('selectionCount');
+      const selectionError = document.getElementById('selectionError');
+      const applySelectionBtn = document.getElementById('applySelection');
 
       const voiceBtn = document.getElementById('voiceBtn');
       const speedBtn = document.getElementById('speedBtn');
 
       // ---- 状態 ----
-      let mode = 'mul';
       let showingAnswer = false;
       let solvedCount = 0;
 
+      const selectionKey = 'kuku_cards_selection_v1';
+      const allProblems = Array.from({ length: 81 }, (_, id) => {
+        const a = Math.floor(id / 9) + 1;
+        const b = id % 9 + 1;
+        return { id, a, b, op: '×', ans: a * b };
+      });
+      let selectedIds = loadSelection();
+      let problemPool = allProblems.filter(p => selectedIds.has(p.id));
+      let draftIds = new Set();
+      const cellButtons = [];
+      const groupButtons = [];
+
       // 現在の問題
-      let current = { a: 1, b: 1, op: '+', ans: 2 };
+      let current = problemPool[0];
 
       // 読み上げ
       const hasTTS = ('speechSynthesis' in window) && ('SpeechSynthesisUtterance' in window);
       let voiceOn = true;
-      let voiceFast = false; // デフォルトは普通速度
+      let voiceFast = true; // デフォルトは「速」
       let cachedVoice = null;
 
-      function rand1to9(){
-        return Math.floor(Math.random() * 9) + 1; // 1..9 (0なし)
-      }
-
-      function rand2to9(){
-        return Math.floor(Math.random() * 8) + 2; // 2..9
-      }
-
-      function computeAns(a, op, b){
-        if (op === '+') return a + b;
-        if (op === '×') return a * b;
-        return a - b;
-      }
-
       function newProblem(){
-        let op = '+';
-        if (mode === 'add') op = '+';
-        if (mode === 'sub') op = '-';
-        if (mode === 'mul') op = '×';
-        if (mode === 'mix') op = ['+', '-', '×'][Math.floor(Math.random() * 3)];
-
-        const randForAdd = () => rand2to9();
-        const randForSub = () => rand1to9();
-        const randForMul = () => rand1to9();
-
-        let a = randForSub();
-        let b = randForSub();
-
-        if (op === '+') {
-          a = randForAdd();
-          b = randForAdd();
-        }
-
-        if (op === '×') {
-          a = randForMul();
-          b = randForMul();
-        }
-
-        if (op === '-') {
-          // マイナスと0を避けるため、a>b にする（答えは1..8）
-          while (a <= b) {
-            a = randForSub();
-            b = randForSub();
-          }
-        }
-
-        const ans = computeAns(a, op, b);
-        current = { a, b, op, ans };
+        current = problemPool[Math.floor(Math.random() * problemPool.length)];
+        const { a, b, op, ans } = current;
 
         exprEl.textContent = `${a} ${op} ${b}`;
         ansEl.textContent = `${ans}`;
@@ -262,6 +337,7 @@
       }
 
       function handleTap(){
+        if (selectionDialog.open) return;
         if (!showingAnswer) {
           revealAnswer();
         } else {
@@ -269,7 +345,159 @@
         }
       }
 
+      // ---- 出題範囲の設定 ----
+      function loadSelection(){
+        try {
+          const saved = JSON.parse(localStorage.getItem(selectionKey));
+          if (Array.isArray(saved)) {
+            const valid = saved.filter(id => Number.isInteger(id) && id >= 0 && id < 81);
+            if (valid.length) return new Set(valid);
+          }
+        } catch (_) { /* 保存が使えない場合も、その場で設定できる。 */ }
+        return new Set(allProblems.map(p => p.id));
+      }
+
+      function updateSelectionUI(){
+        cellButtons.forEach((button, id) => {
+          button.setAttribute('aria-pressed', String(draftIds.has(id)));
+        });
+        groupButtons.forEach(({ button, ids }) => {
+          const count = ids.filter(id => draftIds.has(id)).length;
+          button.setAttribute('aria-pressed', count === 9 ? 'true' : count === 0 ? 'false' : 'mixed');
+        });
+        selectionCount.textContent = `${draftIds.size} / 81問 選択中`;
+        applySelectionBtn.disabled = draftIds.size === 0;
+        selectionError.textContent = draftIds.size === 0 ? '1問以上選んでください。' : '';
+      }
+
+      function setDraftSelection(ids, selected){
+        ids.forEach(id => selected ? draftIds.add(id) : draftIds.delete(id));
+        updateSelectionUI();
+      }
+
+      function makeGroupHeader(number, isRow){
+        const th = document.createElement('th');
+        th.scope = isRow ? 'row' : 'col';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = number;
+        button.setAttribute('aria-label', isRow ? `${number}の段をまとめて選択・解除` : `かける数が${number}の問題をまとめて選択・解除`);
+        const ids = allProblems.filter(p => (isRow ? p.a : p.b) === number).map(p => p.id);
+        bindTap(button, () => {
+          setDraftSelection(ids, !ids.every(id => draftIds.has(id)));
+        }, { stopPropagation: true });
+        groupButtons.push({ button, ids });
+        th.append(button);
+        return th;
+      }
+
+      const headerRow = selectionGrid.createTHead().insertRow();
+      const corner = document.createElement('th');
+      corner.textContent = '×';
+      headerRow.append(corner);
+      for (let b = 1; b <= 9; b++) headerRow.append(makeGroupHeader(b, false));
+      const gridBody = selectionGrid.createTBody();
+      for (let a = 1; a <= 9; a++) {
+        const row = gridBody.insertRow();
+        row.append(makeGroupHeader(a, true));
+        for (let b = 1; b <= 9; b++) {
+          const id = (a - 1) * 9 + b - 1;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'fact-cell';
+          button.dataset.id = id;
+          button.textContent = `${a}×${b}`;
+          button.setAttribute('aria-label', `${a}かける${b}`);
+          cellButtons.push(button);
+          row.insertCell().append(button);
+        }
+      }
+
+      // なぞり始めたマスと同じ状態に揃える。同じマスを通り直しても反転させない。
+      let paintPointer = null;
+      let paintSelected = false;
+      let paintedIds = new Set();
+      function paintCell(button){
+        if (!button) return;
+        const id = Number(button.dataset.id);
+        if (paintedIds.has(id)) return;
+        paintedIds.add(id);
+        setDraftSelection([id], paintSelected);
+      }
+
+      selectionGrid.addEventListener('pointerdown', e => {
+        const button = e.target.closest('.fact-cell');
+        if (!button || !e.isPrimary || e.button !== 0 || paintPointer !== null) return;
+        e.preventDefault();
+        button.focus({ preventScroll: true });
+        paintPointer = e.pointerId;
+        paintSelected = !draftIds.has(Number(button.dataset.id));
+        paintedIds = new Set();
+        selectionGrid.setPointerCapture(e.pointerId);
+        paintCell(button);
+      });
+      selectionGrid.addEventListener('pointermove', e => {
+        if (e.pointerId !== paintPointer) return;
+        e.preventDefault();
+        const button = document.elementFromPoint(e.clientX, e.clientY)?.closest('.fact-cell');
+        if (button && selectionGrid.contains(button)) paintCell(button);
+      });
+      function endPaint(e){
+        if (e.pointerId !== paintPointer) return;
+        paintPointer = null;
+        if (selectionGrid.hasPointerCapture(e.pointerId)) selectionGrid.releasePointerCapture(e.pointerId);
+      }
+      selectionGrid.addEventListener('pointerup', endPaint);
+      selectionGrid.addEventListener('pointercancel', endPaint);
+      selectionGrid.addEventListener('lostpointercapture', endPaint);
+      selectionGrid.addEventListener('click', e => {
+        const button = e.target.closest('.fact-cell');
+        // ポインターは上で処理済み。キーボード・支援技術からのクリックだけ処理する。
+        if (button && e.detail === 0) {
+          const id = Number(button.dataset.id);
+          setDraftSelection([id], !draftIds.has(id));
+        }
+      });
+
+      bindTap(selectionBtn, () => {
+        draftIds = new Set(selectedIds);
+        updateSelectionUI();
+        if (hasTTS) window.speechSynthesis.cancel();
+        selectionDialog.showModal();
+      }, { stopPropagation: true });
+      bindTap(document.getElementById('selectAll'), () => {
+        setDraftSelection(allProblems.map(p => p.id), true);
+      }, { stopPropagation: true });
+      bindTap(document.getElementById('clearSelection'), () => {
+        setDraftSelection(allProblems.map(p => p.id), false);
+      }, { stopPropagation: true });
+      bindTap(document.getElementById('cancelSelection'), () => selectionDialog.close(), { stopPropagation: true });
+      bindTap(applySelectionBtn, () => {
+        if (!draftIds.size) return;
+        const changed = draftIds.size !== selectedIds.size || [...draftIds].some(id => !selectedIds.has(id));
+        selectedIds = new Set(draftIds);
+        problemPool = allProblems.filter(p => selectedIds.has(p.id));
+        try { localStorage.setItem(selectionKey, JSON.stringify([...selectedIds])); } catch (_) {}
+        selectionDialog.close();
+        if (changed) newProblem();
+      }, { stopPropagation: true });
+
       // ---- 読み上げ（Web Speech API） ----
+      // 行が「段」、列が「かける数」。九九独特の音便もひらがなで指定する。
+      const kukuReadings = [
+        ['いんいち', 'いんに', 'いんさん', 'いんし', 'いんご', 'いんろく', 'いんしち', 'いんはち', 'いんく'],
+        ['にいち', 'ににん', 'にさん', 'にし', 'にご', 'にろく', 'にしち', 'にはち', 'にく'],
+        ['さんいち', 'さんに', 'さざん', 'さんし', 'さんご', 'さぶろく', 'さんしち', 'さんぱ', 'さんく'],
+        ['しいち', 'しに', 'しさん', 'しし', 'しご', 'しろく', 'ししち', 'しは', 'しく'],
+        ['ごいち', 'ごに', 'ごさん', 'ごし', 'ごご', 'ごろく', 'ごしち', 'ごは', 'ごっく'],
+        ['ろくいち', 'ろくに', 'ろくさん', 'ろくし', 'ろくご', 'ろくろく', 'ろくしち', 'ろくは', 'ろっく'],
+        ['しちいち', 'しちに', 'しちさん', 'しちし', 'しちご', 'しちろく', 'しちしち', 'しちは', 'しちく'],
+        ['はちいち', 'はちに', 'はっさん', 'はちし', 'はちご', 'はちろく', 'はちしち', 'はっぱ', 'はっく'],
+        ['くいち', 'くに', 'くさん', 'くし', 'くご', 'くろく', 'くしち', 'くは', 'くく'],
+      ];
+      const kukuOnes = ['', 'いち', 'に', 'さん', 'し', 'ご', 'ろく', 'しち', 'はち', 'く'];
+      const kukuTens = ['', 'じゅう', 'にじゅう', 'さんじゅう', 'しじゅう', 'ごじゅう', 'ろくじゅう', 'しちじゅう', 'はちじゅう'];
+
       function loadVoices(){
         if (!hasTTS) return;
         try {
@@ -306,13 +534,13 @@
       }
 
       function speakCurrentProblem(){
-        const opWord = (current.op === '+') ? 'たす' : (current.op === '×') ? 'かける' : 'ひく';
-        // 「7 + 8」ではなく「7 たす 8」のように短く
-        speak(`${current.a} ${opWord} ${current.b}`);
+        const reading = kukuReadings[current.a - 1][current.b - 1];
+        // 一桁の答えには「が」を付け、問題→答えで「ににんが・し」のようにつなぐ。
+        speak(reading + (current.ans < 10 ? 'が' : ''));
       }
 
       function speakAnswer(){
-        speak(`こたえ ${current.ans}`);
+        speak(kukuTens[Math.floor(current.ans / 10)] + kukuOnes[current.ans % 10]);
       }
 
       function updateVoiceUI(){
@@ -353,7 +581,7 @@
 
       bindTap(card, handleTap);
 
-      // 九九ボタンは今の問題を読み直す
+      // 九九ボタンは選択した範囲から次の問題を出す
       bindTap(modeMulBtn, () => {
         newProblem();
       }, { stopPropagation: true });
@@ -397,6 +625,7 @@
 
       // 外付けキーボード用：スペース/Enterで進む
       document.addEventListener('keydown', (e) => {
+        if (selectionDialog.open || e.target.closest('button')) return;
         if (e.key === ' ' || e.key === 'Enter') {
           e.preventDefault();
           handleTap();
